@@ -1,0 +1,217 @@
+diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
+index 73ce180..c98b62c 100644
+--- a/crates/ui-egui/src/dialogs.rs
++++ b/crates/ui-egui/src/dialogs.rs
+@@ -440,21 +440,23 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+                     _ => ("png", false),
+                 };
+                 let suggested = format!("{name}.{ext}");
+-                if let Some(pick) = app.services.pick_save.as_mut() {
+-                    if let Some(path) = pick(&suggested) {
+-                        let mut params = json!({"path": path, "all": all});
+-                        if ext == "pdf"
+-                            && let (Some(o), Some(extra)) = (params.as_object_mut(), pdf_params.as_object())
+-                        {
+-                            o.extend(extra.clone());
+-                        }
+-                        let r = app.session.execute("file.export", &params);
+-                        match r {
+-                            Ok(_) => app.set_status(format!("Exported {path}")),
+-                            Err(e) => app.set_status(e.to_string()),
+-                        }
++                // A host with a save dialog answers with a path and the export runs on the frame it
++                // arrives. The presentation is untouched either way: an export is a copy, and it
++                // must not become the deck's own file (`save_dialogs`).
++                let (ext_owned, pdf_owned) = (ext.to_string(), pdf_params.clone());
++                let asked = app.ask_save(&suggested, move |app, path| {
++                    let mut params = json!({"path": path, "all": all});
++                    if ext_owned == "pdf"
++                        && let (Some(o), Some(extra)) = (params.as_object_mut(), pdf_owned.as_object())
++                    {
++                        o.extend(extra.clone());
+                     }
+-                } else if let (Some(dl), Some(s)) = (app.services.download.as_mut(), app.session.active()) {
++                    match app.session.execute("file.export", &params) {
++                        Ok(_) => app.set_status(format!("Exported {path}")),
++                        Err(e) => app.set_status(e.to_string()),
++                    }
++                });
++                if !asked && let (Some(dl), Some(s)) = (app.services.download.as_mut(), app.session.active()) {
+                     let bytes = match ext {
+                         "png" | "jpg" => {
+                             let img = deckcraft_render::render_slide(
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index bef64a4..9c7f17b 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -17,6 +17,7 @@ pub mod menus;
+ pub mod panes;
+ pub mod ribbon;
+ pub mod show;
++mod save_dialogs;
+ pub mod sorter;
+ pub mod status;
+ pub mod textures;
+@@ -47,6 +48,12 @@ pub struct Services {
+     pub pick_open: Option<PickFn>,
+     /// Save dialog with a suggested name → path.
+     pub pick_save: Option<PickFn>,
++    /// A save dialog whose answer arrives later: what `pick_save` is for a host that cannot show a
++    /// panel without ending the frame — the browser, and Android, where the picker is drawn with
++    /// egui between frames. The host returns a receiver and the app runs what asked on the frame
++    /// the path arrives ([`save_dialogs`]); an empty answer is a cancellation. A host with this
++    /// must be preferred over handing it finished bytes, which cannot tell the app where they went.
++    pub pick_save_async: Option<Box<dyn Fn(&str) -> Receiver<Option<String>>>>,
+     pub read: Option<ReadFn>,
+     pub write: Option<WriteFn>,
+     /// Asynchronous open dialog (web): the chosen file arrives through `inbox`.
+@@ -209,6 +216,8 @@ pub struct SlideApp {
+     pub(crate) notes_buf: (u64, usize, String),
+     /// Thumbnail pane drag (slide index, current drop index).
+     pub(crate) thumb_drag: Option<(usize, usize)>,
++    /// The save dialog the host is showing, and what to do with its answer ([`save_dialogs`]).
++    pending_save: Option<save_dialogs::PendingSave>,
+ }
+ 
+ impl SlideApp {
+@@ -244,6 +253,7 @@ impl SlideApp {
+             quit_confirmed: false,
+             notes_buf: (0, usize::MAX, String::new()),
+             thumb_drag: None,
++            pending_save: None,
+         }
+     }
+ 
+@@ -414,18 +424,20 @@ impl SlideApp {
+         let name = self.session.active().map(|d| d.title()).unwrap_or_else(|| "Presentation".into());
+         let ext = if format == "pptx" { "pptx" } else { "deckcraft" };
+         let suggested = format!("{name}.{ext}");
+-        if let Some(pick) = self.services.pick_save.as_mut() {
+-            if let Some(path) = pick(&suggested) {
+-                match self.session.execute("file.saveAs", &json!({"path": path})) {
+-                    Ok(_) => {
+-                        self.set_status(format!("Saved {path}"));
+-                        self.ui.recent.retain(|p| *p != path);
+-                        self.ui.recent.insert(0, path);
+-                    }
+-                    Err(e) => self.set_status(e.to_string()),
+-                }
++        // A host with a save dialog gets the path back, so the presentation learns which file it
++        // is: the title bar follows, Save stops asking, and closing stops prompting. Only a host
++        // with neither a blocking nor an asynchronous dialog falls through to the bytes below,
++        // which cannot name what they wrote (`save_dialogs`).
++        let asked = self.ask_save(&suggested, |app, path| match app.session.execute("file.saveAs", &json!({"path": path})) {
++            Ok(_) => {
++                app.set_status(format!("Saved {path}"));
++                app.ui.recent.retain(|p| p != path);
++                app.ui.recent.insert(0, path.to_string());
+             }
+-        } else if let Some(dl) = self.services.download.as_mut()
++            Err(e) => app.set_status(e.to_string()),
++        });
++        if !asked
++            && let Some(dl) = self.services.download.as_mut()
+             && let Some(d) = self.session.active()
+         {
+             match deckcraft_engine::cmd::file::save_bytes(&d.doc, ext) {
+@@ -555,6 +567,8 @@ impl SlideApp {
+         if self.fonts_ready {
+             self.drain_inbox();
+         }
++        // A save dialog that answered between frames: what asked runs now, with the path.
++        self.poll_save();
+         if !self.synthetic.is_empty() {
+             ctx.request_repaint();
+         }
+diff --git a/crates/ui-egui/src/save_dialogs.rs b/crates/ui-egui/src/save_dialogs.rs
+new file mode 100644
+index 0000000..5f3aace
+--- /dev/null
++++ b/crates/ui-egui/src/save_dialogs.rs
+@@ -0,0 +1,86 @@
++//! Save dialogs that don't hold the frame, and what the answer to them is for.
++//!
++//! # Why this exists
++//!
++//! `Services::pick_save` is the blocking shape: the host shows a panel and returns the chosen path
++//! in the same call. That works on the desktop (`rfd`) and cannot work on a host that draws its own
++//! picker between frames — the browser, and Android, where there is no native dialog to call at all.
++//! Those hosts return a receiver instead ([`Services::pick_save_async`]) and the app does what the
++//! blocking call would have done on the frame the path arrives, exactly as the picture and media
++//! pickers already do through [`Services::open_async`].
++//!
++//! # The cost of not having it
++//!
++//! Handing the host finished *bytes* instead (the web `download` path) looks equivalent and is not:
++//! the app is never told where the file went, so `DocState::path` stays `None` and the presentation
++//! is still "Untitled" with unsaved changes — the title bar never changes, `Ctrl+S` asks for a
++//! location again, and closing prompts to save what was just saved. Every save dialog in this app
++//! goes through [`SlideApp::ask_save`] so that cannot happen.
++//!
++//! [`Services::pick_save_async`]: crate::Services::pick_save_async
++//! [`Services::open_async`]: crate::Services::open_async
++
++use std::sync::mpsc::{Receiver, TryRecvError};
++
++use crate::SlideApp;
++
++/// A save dialog the host is showing: the answer arrives on `rx`, and `after` is what the blocking
++/// `pick_save` would have run with it.
++pub(crate) struct PendingSave {
++    rx: Receiver<Option<String>>,
++    after: Box<dyn FnOnce(&mut SlideApp, &str)>,
++}
++
++impl SlideApp {
++    /// Whether a save dialog is open (its answer hasn't arrived yet).
++    pub fn save_dialog_open(&self) -> bool {
++        self.pending_save.is_some()
++    }
++
++    /// Ask for a path to save to, and do `after` with it: straight away for a blocking host dialog,
++    /// on a later frame for an asynchronous one.
++    ///
++    /// Returns false when the host has neither, which is how a caller knows to fall back to its
++    /// browser-download path — and only then, because a host with a picker must never be handed
++    /// bytes it cannot name.
++    pub(crate) fn ask_save(&mut self, suggested: &str, after: impl FnOnce(&mut SlideApp, &str) + 'static) -> bool {
++        // One dialog at a time: the app has one pending action, and while it is waiting the answer
++        // to it decides what happens.
++        if self.pending_save.is_some() {
++            return true;
++        }
++        if let Some(pick) = self.services.pick_save.as_mut() {
++            if let Some(path) = pick(suggested) {
++                after(self, &path);
++            }
++            return true;
++        }
++        let Some(ask) = &self.services.pick_save_async else {
++            return false;
++        };
++        self.pending_save = Some(PendingSave { rx: ask(suggested), after: Box::new(after) });
++        true
++    }
++
++    /// Use the answer, once there is one. Called every frame from [`SlideApp::logic`].
++    pub(crate) fn poll_save(&mut self) {
++        let Some(pending) = self.pending_save.as_ref() else {
++            return;
++        };
++        match pending.rx.try_recv() {
++            Err(TryRecvError::Empty) => {}
++            Ok(answer) => {
++                let Some(PendingSave { after, .. }) = self.pending_save.take() else {
++                    return;
++                };
++                // Nothing to do with a cancelled dialog, which is what an empty answer is.
++                if let Some(path) = answer {
++                    after(self, &path);
++                }
++            }
++            // The host went away without answering (its sender was dropped): a cancellation, not a
++            // dialog this app will wait on for ever.
++            Err(TryRecvError::Disconnected) => self.pending_save = None,
++        }
++    }
++}
