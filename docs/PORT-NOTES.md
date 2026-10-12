@@ -100,6 +100,12 @@ at runtime.
 | `crates/ui-egui/src/lib.rs` | `Services::pick_save_async`, `pending_save`, `ask_save`, `poll_save`; Save As asks asynchronously; recent list updated on save | §2 |
 | `crates/ui-egui/src/dialogs.rs` | Export asks asynchronously and exports on the answer frame | §2 |
 
+## What is deliberately *not* in the patch
+
+`Cargo.lock` is excluded on purpose: it moves only because the port crate is a new workspace member,
+and `cargo` regenerates it on the first build. The patch contains only changes that matter to a reader
+— every tracked file the port touches, plus any new file that has to live inside an upstream directory.
+
 ## Not verified here
 
 The APK in Releases was not re-run on a device while publishing this repository. The fixes came from
