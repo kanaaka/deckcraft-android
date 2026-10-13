@@ -8,8 +8,8 @@ and egui interface, packaged as a NativeActivity APK for sideloading on arm64 de
 | Upstream project | [`storytold/deckcraft`](https://github.com/storytold/deckcraft) — Apache-2.0 OR MIT |
 | Pinned commit | `be14248` (upstream version `0.5.0`) |
 | Android package | `ai.storyteller.deckcraft` |
-| Published APK | `deckcraft-0.5.0-arm64-v8a-v3.apk` — 29.1 MB, arm64-v8a, signed |
-| APK sha256 | `5a944e8c77784f45b7bf89bbf71c557719ec83ce052d1379499b13f128231f6d` |
+| Published APK | `deckcraft-0.5.0-arm64-v8a-20261013.apk` — 29.1 MB, arm64-v8a, signed (release **v0.1.1**, 2026-10-13) |
+| APK sha256 | `16c4d66cd7955fbebe977bc3d37cd814279086eb672155fb2d965023b071d091` |
 | Upstream files changed | 3 files (1 of them new) — see [`patches/`](patches/) |
 | New port crate | `apps/deckcraft-android/` — 1138 lines of Rust plus resources |
 
@@ -73,8 +73,9 @@ A tick means the check was *run*, not inferred; the wording says how far it goes
 | Claim | How it was checked | Result |
 |---|---|---|
 | `patches/…patch` applies to a clean checkout of the pin | fresh `git init` + `git fetch --depth 1 origin be14248577b92059eb2b8c0c9460cceffbc1f01d` + `git apply --check` | ✅ applies cleanly |
-| The assembled tree equals the tree the APK was built from | file-by-file SHA-256 (line endings normalised) over every patched file and every file of the port crate | ✅ 14 files identical, none differing |
+| The assembled tree equals the tree the APK was built from | file-by-file SHA-256 (line endings normalised) over every patched file and every file of the port crate | ✅ 12 files identical, none differing |
 | The port crate compiles for Android | `cargo check -p deckcraft-android --target aarch64-linux-android`, run in a tree assembled from scratch (fresh `git fetch` of the pin, patch applied, port crate copied in) | ✅ exit 0, from the freshly assembled tree (clone + patch + crate), not the build tree |
+| The port crate's own tests | `cargo test -p deckcraft-android` in the freshly assembled tree | ✅ 3/3 pass |
 | APK is signed and is the right artifact | `apksigner verify --verbose`, `aapt2 dump badging`, sha256 | ✅ v2/v3 signatures true, `native-code: 'arm64-v8a'`, package `ai.storyteller.deckcraft` |
 | Behaviour on real hardware | hand-testing on the porter's arm64 tablet | ⚠️ the fixes below were found and driven by that testing; each published binary is not individually re-verified here |
 
