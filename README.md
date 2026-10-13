@@ -8,10 +8,10 @@ and egui interface, packaged as a NativeActivity APK for sideloading on arm64 de
 | Upstream project | [`storytold/deckcraft`](https://github.com/storytold/deckcraft) — Apache-2.0 OR MIT |
 | Pinned commit | `be14248` (upstream version `0.5.0`) |
 | Android package | `ai.storyteller.deckcraft` |
-| Published APK | `deckcraft-0.5.0-arm64-v8a-20261013.apk` — 29.1 MB, arm64-v8a, signed (release **v0.1.1**, 2026-10-13) |
-| APK sha256 | `16c4d66cd7955fbebe977bc3d37cd814279086eb672155fb2d965023b071d091` |
+| Published APK | `deckcraft-0.5.0-arm64-v8a-20261013b.apk` — 29.1 MB, arm64-v8a, signed (release **v0.1.2**, 2026-10-13) |
+| APK sha256 | `c1d211868ab74de4f93b009a026b86f477f61f37c14a745c5752ee0e81a1b009` |
 | Upstream files changed | 3 files (1 of them new) — see [`patches/`](patches/) |
-| New port crate | `apps/deckcraft-android/` — 1138 lines of Rust plus resources |
+| New port crate | `apps/deckcraft-android/` — 1574 lines of Rust plus resources |
 
 ## What this repository is
 
